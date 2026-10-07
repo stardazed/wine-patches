@@ -2,9 +2,9 @@
 
 | Build | Status | Notes |
 |---|---|---|
-| Adobe Photoshop 2026 27.10 (20260824.r.26 9d9635d) | ✅ | launches, AI mode doesn't work. |
+| Adobe Photoshop 2026 27.10 (20260824.r.26 9d9635d) | ✅ | launches, AI Assisted mode doesn't work. |
 | Adobe Photoshop 2026 27.11 | ⚠️ | not tested |
-
+<img width="1920" height="1080" alt="10-07_10-42-48" src="https://github.com/user-attachments/assets/2ad8250b-8179-4eee-ac35-4027a11ab8f3" />
 Apply in this order from the top of the source tree: `for f in wine-patches/*.patch; do patch -p1 < $f; done`
 (the file names sort correctly: the d2d1/dwrite ones are independent of the dxcore series).
 
@@ -22,6 +22,7 @@ After patching and building, install these verbs:
 ```sh
 $ winetricks vkd3d dxvk gdiplus corefonts d3dcompiler_43 d3dcompiler_47 msxml3 msxml6
 ```
+
 
 ## Build only the changed DLLs
 
