@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """patch_libxpuinfo.py - make Adobe's LibXPUInfo.dll survive Wine's missing DXCore property IsDetachable (13).
 
-Problem (verified from your logs + disassembly): in Device::initDXCoreDevice's helper, after
+Problem in Device::initDXCoreDevice's helper, after
     call IDXCoreAdapter::GetProperty(IsDetachable=13, ...)
 the code does  `test eax,eax ; js THROW`  and THROW builds+throws winrt::hresult_error. Wine's dxcore returns
 DXGI_ERROR_INVALID_CALL for property 13, so Photoshop's GPU/XPU enumeration throws.
