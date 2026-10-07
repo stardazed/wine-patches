@@ -1,0 +1,84 @@
+--- a/dlls/dwrite/layout.c
++++ b/dlls/dwrite/layout.c
+@@ -4376,11 +4376,78 @@
+ }
+ 
+ static HRESULT WINAPI dwritetextlayout_HitTestPoint(IDWriteTextLayout4 *iface,
+-    FLOAT pointX, FLOAT pointY, BOOL* is_trailinghit, BOOL* is_inside, DWRITE_HIT_TEST_METRICS *metrics)
++    FLOAT pointX, FLOAT pointY, BOOL *is_trailinghit, BOOL *is_inside, DWRITE_HIT_TEST_METRICS *metrics)
+ {
+-    FIXME("%p, %.8e, %.8e, %p, %p, %p): stub\n", iface, pointX, pointY, is_trailinghit, is_inside, metrics);
++    struct dwrite_textlayout *layout = impl_from_IDWriteTextLayout4(iface);
++    DWRITE_HIT_TEST_METRICS box, best;
++    float best_distance = 0.0f;
++    bool have_best = false;
++    UINT32 position = 0;
++    HRESULT hr;
+ 
+-    return E_NOTIMPL;
++    TRACE("%p, %.8e, %.8e, %p, %p, %p.\n", iface, pointX, pointY, is_trailinghit, is_inside, metrics);
++
++    if (!is_trailinghit || !is_inside || !metrics)
++        return E_INVALIDARG;
++
++    *is_trailinghit = FALSE;
++    *is_inside = FALSE;
++    memset(metrics, 0, sizeof(*metrics));
++    memset(&best, 0, sizeof(best));
++
++    if (FAILED(hr = layout_compute_effective_runs(layout)))
++        return hr;
++
++    /* Walk the text cluster by cluster, using the box that HitTestTextPosition() reports for each of them.
++     * The cluster whose box contains the point wins; otherwise the closest box is reported as a miss. */
++    while (position < layout->length)
++    {
++        float x, y, left, top, right, bottom, dx, dy, distance;
++
++        if (FAILED(IDWriteTextLayout4_HitTestTextPosition(iface, position, FALSE, &x, &y, &box)))
++        {
++            ++position;
++            continue;
++        }
++
++        left = box.left;
++        top = box.top;
++        right = box.left + box.width;
++        bottom = box.top + box.height;
++
++        if (pointX >= left && pointX < right && pointY >= top && pointY < bottom)
++        {
++            best = box;
++            have_best = true;
++            *is_inside = TRUE;
++            break;
++        }
++
++        dx = pointX < left ? left - pointX : (pointX > right ? pointX - right : 0.0f);
++        dy = pointY < top ? top - pointY : (pointY > bottom ? pointY - bottom : 0.0f);
++        distance = dx * dx + dy * dy;
++
++        if (!have_best || distance < best_distance)
++        {
++            best = box;
++            best_distance = distance;
++            have_best = true;
++        }
++
++        position += max(box.length, 1);
++    }
++
++    if (!have_best)
++        return S_OK;
++
++    /* Trailing edge is relative to the reading direction of the cluster. */
++    if (best.bidiLevel & 1)
++        *is_trailinghit = pointX < best.left + best.width / 2.0f;
++    else
++        *is_trailinghit = pointX >= best.left + best.width / 2.0f;
++
++    *metrics = best;
++    return S_OK;
+ }
+ 
+ static struct layout_effective_run *layout_get_effective_run_for_position(struct dwrite_textlayout *layout,

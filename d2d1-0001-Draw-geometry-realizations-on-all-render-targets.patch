@@ -1,0 +1,37 @@
+--- a/dlls/d2d1/device.c
++++ b/dlls/d2d1/device.c
+@@ -2921,24 +2921,20 @@
+ static void STDMETHODCALLTYPE d2d_device_context_DrawGeometryRealization(ID2D1DeviceContext6 *iface,
+         ID2D1GeometryRealization *realization, ID2D1Brush *brush)
+ {
+-    struct d2d_device_context *context = impl_from_ID2D1DeviceContext(iface);
+     struct d2d_geometry_realization *r = unsafe_impl_from_ID2D1GeometryRealization(realization);
+ 
+-    FIXME("iface %p, realization %p, brush %p semi-stub!\n", iface, realization, brush);
++    TRACE("iface %p, realization %p, brush %p.\n", iface, realization, brush);
+ 
+-    if (context->target.type == D2D_TARGET_COMMAND_LIST)
+-    {
+-        if (r->filled)
+-        {
+-            d2d_command_list_fill_geometry(context->target.command_list, context, r->geometry, brush, NULL);
+-        }
+-        else
+-        {
+-            d2d_command_list_draw_geometry(context->target.command_list, context, r->geometry, brush,
+-                    r->stroke_width, r->stroke_style);
+-        }
++    if (!r || !brush)
+         return;
+-    }
++
++    /* A geometry realization is only a cached representation of the geometry it was created from, so drawing
++     * it is equivalent to filling or stroking that geometry. The Fill/DrawGeometry methods already handle
++     * every target type (command lists, bitmaps, window and DXGI surface targets). */
++    if (r->filled)
++        d2d_device_context_FillGeometry(iface, r->geometry, brush, NULL);
++    else
++        d2d_device_context_DrawGeometry(iface, r->geometry, brush, r->stroke_width, r->stroke_style);
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE d2d_device_context_CreateInk(ID2D1DeviceContext6 *iface,

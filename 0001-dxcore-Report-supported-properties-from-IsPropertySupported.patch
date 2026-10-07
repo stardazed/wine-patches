@@ -1,0 +1,22 @@
+--- a/dlls/dxcore/dxcore.c
++++ b/dlls/dxcore/dxcore.c
+@@ -95,10 +95,17 @@
+     return FALSE;
+ }
+ 
++static HRESULT dxcore_adapter_get_property_size(struct dxcore_adapter *adapter,
++        DXCoreAdapterProperty property, size_t *size);
++
+ static BOOL STDMETHODCALLTYPE dxcore_adapter_IsPropertySupported(IDXCoreAdapter *iface, DXCoreAdapterProperty property)
+ {
+-    FIXME("iface %p, property %u stub!\n", iface, property);
+-    return FALSE;
++    struct dxcore_adapter *adapter = impl_from_IDXCoreAdapter(iface);
++    size_t size;
++
++    TRACE("iface %p, property %u.\n", iface, property);
++
++    return SUCCEEDED(dxcore_adapter_get_property_size(adapter, property, &size));
+ }
+ 
+ static HRESULT dxcore_adapter_get_property_size(struct dxcore_adapter *adapter,

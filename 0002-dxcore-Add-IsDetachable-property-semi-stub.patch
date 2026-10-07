@@ -1,0 +1,31 @@
+--- a/dlls/dxcore/dxcore.c
++++ b/dlls/dxcore/dxcore.c
+@@ -120,6 +120,7 @@
+         [DedicatedSystemMemory] = sizeof(UINT64),
+         [SharedSystemMemory] = sizeof(UINT64),
+         [IsHardware] = sizeof(BYTE),
++        [IsDetachable] = sizeof(BYTE),
+     };
+ 
+     switch (property)
+@@ -131,6 +132,7 @@
+         case DedicatedSystemMemory:
+         case SharedSystemMemory:
+         case IsHardware:
++        case IsDetachable:
+             *size = property_sizes[property];
+             return S_OK;
+         case DriverDescription:
+@@ -205,6 +207,12 @@
+             *(BYTE *)buffer = 1;
+             break;
+ 
++        case IsDetachable:
++            /* Wine does not model removable adapters. */
++            FIXME("Returning FALSE for IsDetachable.\n");
++            *(BYTE *)buffer = 0;
++            break;
++
+         case DriverDescription:
+         {
+             memcpy(buffer, adapter->identifier.description, size);

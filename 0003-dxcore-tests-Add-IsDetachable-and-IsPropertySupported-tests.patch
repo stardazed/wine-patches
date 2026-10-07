@@ -1,0 +1,62 @@
+--- a/dlls/dxcore/tests/dxcore.c
++++ b/dlls/dxcore/tests/dxcore.c
+@@ -150,6 +150,11 @@
+ 
+ static void test_GetProperty(void)
+ {
++    static const DXCoreAdapterProperty properties[] =
++    {
++        InstanceLuid, DriverVersion, DriverDescription, HardwareID, DedicatedAdapterMemory,
++        DedicatedSystemMemory, SharedSystemMemory, IsHardware, IsDetachable,
++    };
+     IDXCoreAdapterFactory *factory;
+     IDXCoreAdapterList *list;
+     DXCoreHardwareID hwid[2];
+@@ -157,7 +162,7 @@
+     uint32_t count, dummy;
+     uint64_t memory;
+     LARGE_INTEGER version;
+-    BYTE is_hardware;
++    BYTE is_hardware, is_detachable;
+     LUID luid[2];
+     size_t size;
+     HRESULT hr;
+@@ -305,6 +310,38 @@
+         ok(hr == S_OK, "Got hr %#lx.\n", hr);
+         ok(dummy == is_hardware, "Got value %#x.\n", dummy);
+ 
++        /* IsDetachable */
++        hr = IDXCoreAdapter_GetProperty(adapter, IsDetachable, 0, NULL);
++        ok(hr == E_POINTER, "Got hr %#lx.\n", hr);
++        hr = IDXCoreAdapter_GetProperty(adapter, IsDetachable, 0, &is_detachable);
++        ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
++
++        hr = IDXCoreAdapter_GetPropertySize(adapter, IsDetachable, NULL);
++        ok(hr == E_POINTER, "Got hr %#lx.\n", hr);
++
++        size = 0;
++        hr = IDXCoreAdapter_GetPropertySize(adapter, IsDetachable, &size);
++        ok(hr == S_OK, "Got hr %#lx.\n", hr);
++        ok(size == sizeof(is_detachable), "Got property size %Iu.\n", size);
++
++        is_detachable = 3;
++        hr = IDXCoreAdapter_GetProperty(adapter, IsDetachable, sizeof(is_detachable), &is_detachable);
++        ok(hr == S_OK, "Got hr %#lx.\n", hr);
++        ok(is_detachable == 0 || is_detachable == 1, "Got value %d.\n", is_detachable);
++
++        /* IsIntegrated, the adapter type is not available from wined3d yet. */
++        size = 0;
++        hr = IDXCoreAdapter_GetPropertySize(adapter, IsIntegrated, &size);
++        todo_wine ok(hr == S_OK, "Got hr %#lx.\n", hr);
++
++        /* IsPropertySupported */
++        ok(!IDXCoreAdapter_IsPropertySupported(adapter, 0xdeadbeef), "Unknown property reported as supported.\n");
++        for (unsigned int j = 0; j < ARRAY_SIZE(properties); ++j)
++        {
++            ok(IDXCoreAdapter_IsPropertySupported(adapter, properties[j]), "Property %u reported as unsupported.\n",
++                    properties[j]);
++        }
++
+         /* DriverDescription */
+         size = 0;
+         hr = IDXCoreAdapter_GetPropertySize(adapter, DriverDescription, &size);
