@@ -1,11 +1,26 @@
 # Wine patches for Photoshop 27 (against vanilla wine-11.19)
 
+## Just want to run Photoshop?
+
+Download a ready-made build from the [Releases page](https://github.com/stardazed/wine-patches/releases). No patching or compiling needed.
+
+- `...-amd64-wow64.tar.xz`: use as a custom Wine runner in Lutris, Bottles or Heroic.
+- `...-compattool.tar.xz`: for Steam. Extract into `~/.steam/root/compatibilitytools.d/`, restart Steam, then pick it under Properties > Compatibility.
+
+Then install these in your prefix:
+```sh
+$ winetricks vkd3d dxvk gdiplus corefonts d3dcompiler_43 d3dcompiler_47 msxml3 msxml6
+```
+
+
 | Build | Status | Notes |
 |---|---|---|
 | Adobe Photoshop 2026 27.10 (20260824.r.26 9d9635d) | ✅ | Drag & Drop doesn't work. |
 | Adobe Photoshop 2026 27.11 | ⚠️ | not tested |
 <img width="1920" height="1080" alt="10-07_10-42-48" src="https://github.com/user-attachments/assets/2ad8250b-8179-4eee-ac35-4027a11ab8f3" />
-Apply in this order from the top of the source tree: `for f in wine-patches/*.patch; do patch -p1 < $f; done`
+## For developers
+
+Apply in this order from the top of the source tree: `for f in patches/11.19/*.patch; do patch -p1 < $f; done`
 (the file names sort correctly: the d2d1/dwrite ones are independent of the dxcore series).
 
 | patch | what | status |
@@ -18,18 +33,50 @@ Apply in this order from the top of the source tree: `for f in wine-patches/*.pa
 
 `IsIntegrated` (12) is intentionally NOT implemented because wined3d does not expose the adapter type (Vulkan deviceType is not captured), so any value would be a guess. Adobe's LibXPUInfo tolerates its absence.
 
-After patching and building, install these verbs:
+## Build from source
+
+Package names are for Ubuntu/Debian. Builds a full 64-bit Wine with WoW64 (no 32-bit libs needed).
+
+Install dependencies:
 ```sh
-$ winetricks vkd3d dxvk gdiplus corefonts d3dcompiler_43 d3dcompiler_47 msxml3 msxml6
+sudo apt install build-essential autoconf automake libtool bison flex gperf perl pkg-config \
+  gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 ccache wget xz-utils \
+  libx11-dev libxext-dev libxrandr-dev libxi-dev libxcursor-dev libxfixes-dev \
+  libxrender-dev libxcomposite-dev libxinerama-dev libxxf86vm-dev libxkbcommon-dev \
+  libxkbcommon-x11-dev libwayland-dev wayland-protocols libegl-dev libgl-dev libvulkan-dev \
+  libfreetype-dev libfontconfig-dev libpulse-dev libasound2-dev libudev-dev \
+  libusb-1.0-0-dev libsdl2-dev libgnutls28-dev libunwind-dev libdbus-1-dev \
+  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libcups2-dev libsane-dev \
+  libv4l-dev libpcap-dev libkrb5-dev libcap2-dev libgphoto2-dev libopenal-dev \
+  libsystemd-dev libxml2-dev libxslt1-dev libpcsclite-dev
 ```
 
-
-## Build only the changed DLLs
-
+Get the source and apply the patches (run from this repo's root):
+```sh
+wget https://dl.winehq.org/wine/source/11.x/wine-11.19.tar.xz
+mkdir wine && tar xf wine-11.19.tar.xz -C wine --strip-components=1
+for f in patches/11.19/*.patch; do patch -d wine -Np1 < $f; done
+(cd wine && tools/make_requests && tools/make_specfiles && autoreconf -f)
 ```
-tar xf wine-11_19_tar.xz && cd wine-11.19 && for f in ../wine-patches/*.patch; do patch -p1 < $f; done
-mkdir ../build && cd ../build && ../wine-11.19/configure --enable-win64 --disable-tests   # drop --disable-tests to build the tests
-make -j"$(nproc)" dlls/d2d1/all dlls/dwrite/all dlls/dxcore/all     # if this target form is rejected, run a plain `make -j`
-# back up, then copy the PE builtins into your 11.18 install:
-cp dlls/d2d1/x86_64-windows/d2d1.dll dlls/dwrite/x86_64-windows/dwrite.dll dlls/dxcore/x86_64-windows/dxcore.dll  <wine>/lib/wine/x86_64-windows/
+
+Build and install to your home directory:
+```sh
+mkdir build && cd build
+../wine/configure --enable-archs=i386,x86_64 --prefix=$HOME/wine-11.19-patched \
+  --without-oss --disable-winemenubuilder --disable-tests CFLAGS="-O2" CROSSCFLAGS="-O2"
+make -j"$(nproc)"
+make install
 ```
+
+Check it:
+```sh
+$HOME/wine-11.19-patched/bin/wine --version
+```
+
+Install the winetricks verbs into a new prefix using your build:
+```sh
+export WINE=$HOME/wine-11.19-patched/bin/wine WINEPREFIX=$HOME/.wine-photoshop
+winetricks vkd3d dxvk gdiplus corefonts d3dcompiler_43 d3dcompiler_47 msxml3 msxml6
+```
+
+To use it from Lutris, Bottles or Heroic, add `~/wine-11.19-patched` as a custom Wine runner.
