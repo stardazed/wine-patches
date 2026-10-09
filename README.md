@@ -18,6 +18,8 @@ $ winetricks vkd3d dxvk gdiplus corefonts d3dcompiler_43 d3dcompiler_47 msxml3 m
 | Adobe Photoshop 2026 27.10 (20260824.r.26 9d9635d) | ✅ | Drag & Drop doesn't work. |
 | Adobe Photoshop 2026 27.11 | ⚠️ | not tested |
 <img width="1920" height="1080" alt="10-07_10-42-48" src="https://github.com/user-attachments/assets/2ad8250b-8179-4eee-ac35-4027a11ab8f3" />
+
+
 ## For developers
 
 Apply in this order from the top of the source tree: `for f in patches/11.19/*.patch; do patch -p1 < $f; done`
