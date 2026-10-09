@@ -1,10 +1,15 @@
-name: Build Wine (WoW64)
+name: Build Wine (WoW64) + Steam/umu tool
 
+# Manual only. Nothing runs unless you press "Run workflow".
+# Produces two release assets from ONE build:
+#   1. wine-<ver>-patched-amd64-wow64.tar.xz   plain Wine  -> Lutris / Bottles / Heroic custom runner
+#   2. wine-<ver>-patched-compattool.tar.xz    Wine + run.sh + manifests + DXVK + vkd3d-proton
+#                                              -> Steam compatibilitytools.d (and umu, experimental)
 on:
   workflow_dispatch:
     inputs:
       wine_version:
-        description: "Vanilla Wine version to build (e.g. 11.19, 11.20)"
+        description: "Vanilla Wine version to build (e.g. 11.18, 11.19)"
         required: true
         default: "11.19"
       patch_dir:
@@ -15,6 +20,14 @@ on:
         description: "Optional suffix to re-release the same Wine version (e.g. r2 -> tag wine-11.19-r2)"
         required: false
         default: ""
+      dxvk_version:
+        description: "DXVK release bundled in the Steam/umu tool ('none' = don't bundle). 3.x needs recent Vulkan drivers"
+        required: false
+        default: "3.0.2"
+      vkd3d_proton_version:
+        description: "vkd3d-proton release bundled in the Steam/umu tool ('none' = don't bundle)"
+        required: false
+        default: "3.0.1"
       configure_flags:
         description: "Extra ./configure flags"
         required: false
@@ -24,6 +37,10 @@ on:
         type: choice
         options: [ubuntu-24.04, ubuntu-22.04]
         default: ubuntu-24.04
+      smoke_test:
+        description: "Run the packaged tool once (headless) before publishing"
+        type: boolean
+        default: true
       publish:
         description: "Publish to GitHub Releases (off = only keep as workflow artifact)"
         type: boolean
@@ -34,12 +51,16 @@ permissions:
 
 env:
   WINE_VERSION: ${{ inputs.wine_version }}
-  NAME: wine-${{ inputs.wine_version }}-patched-amd64-wow64
+  REVISION: ${{ inputs.revision }}
+  DXVK_VERSION: ${{ inputs.dxvk_version }}
+  VKD3D_VERSION: ${{ inputs.vkd3d_proton_version }}
+  PLAIN: wine-${{ inputs.wine_version }}-patched-amd64-wow64
+  TOOL: wine-${{ inputs.wine_version }}-patched-compattool
 
 jobs:
   build:
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 180
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
 
@@ -50,7 +71,7 @@ jobs:
           # No i386 libs / chroots needed (unlike Kron4ek's old two-chroot setup).
           sudo apt-get install -y --no-install-recommends \
             build-essential autoconf automake libtool bison flex gperf perl pkg-config \
-            gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 ccache wget xz-utils \
+            gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 ccache wget xz-utils zstd \
             libx11-dev libxext-dev libxrandr-dev libxi-dev libxcursor-dev libxfixes-dev \
             libxrender-dev libxcomposite-dev libxinerama-dev libxxf86vm-dev libxkbcommon-dev \
             libxkbcommon-x11-dev libwayland-dev wayland-protocols libegl-dev libgl-dev libvulkan-dev \
@@ -58,7 +79,7 @@ jobs:
             libusb-1.0-0-dev libsdl2-dev libgnutls28-dev libunwind-dev libdbus-1-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libcups2-dev libsane-dev \
             libv4l-dev libpcap-dev libkrb5-dev libcap2-dev libgphoto2-dev libopenal-dev \
-            libsystemd-dev libxml2-dev libxslt1-dev libpcsclite-dev libusb-1.0-0-dev
+            libsystemd-dev libxml2-dev libxslt1-dev libpcsclite-dev
 
       - name: Download Wine ${{ env.WINE_VERSION }} source
         run: |
@@ -68,14 +89,15 @@ jobs:
           [ "${minor:0:1}" = "0" ] && dir="$major.0" || dir="$major.x"
           tar_name="wine-$WINE_VERSION.tar.xz"
           wget -q "https://dl.winehq.org/wine/source/$dir/$tar_name" \
-            || wget -q -O "$tar_name" "https://github.com/wine-mirror/wine/archive/refs/tags/wine-$WINE_VERSION.tar.gz" 
+            || wget -q -O "$tar_name" "https://github.com/wine-mirror/wine/archive/refs/tags/wine-$WINE_VERSION.tar.gz"
           mkdir wine && tar -xf "$tar_name" -C wine --strip-components=1
           cat wine/VERSION
 
       - name: Apply patches
-        id: patches
+        env:
+          PATCH_DIR_INPUT: ${{ inputs.patch_dir }}
         run: |
-          dir="${{ inputs.patch_dir }}"
+          dir="$PATCH_DIR_INPUT"
           if   [ -n "$dir" ];                   then :
           elif [ -d "patches/$WINE_VERSION" ];  then dir="patches/$WINE_VERSION"
           else                                       dir="."
@@ -107,48 +129,170 @@ jobs:
           restore-keys: ccache-${{ inputs.runner }}-
 
       - name: Configure
+        env:
+          CONFIGURE_FLAGS: ${{ inputs.configure_flags }}
         run: |
-          mkdir build && cd build
           echo "/usr/lib/ccache" >> "$GITHUB_PATH"   # ccache wraps gcc + both mingw compilers; persists to the Build step
           export PATH="/usr/lib/ccache:$PATH"
+          mkdir build && cd build
+          # -O2 without -g also keeps the PE dlls free of DWARF (that is what makes other builds huge)
           ../wine/configure --enable-archs=i386,x86_64 \
-            --prefix=/opt/$NAME ${{ inputs.configure_flags }} \
+            --prefix=/opt/$PLAIN $CONFIGURE_FLAGS \
             CFLAGS="-O2" CROSSCFLAGS="-O2"
 
       - name: Build
         run: make -C build -j"$(nproc)"
 
-      - name: Install and package
+      - name: Install (staged, no sudo) and slim
         run: |
-          sudo make -C build install        # -> /opt/$NAME
-          sudo find /opt/$NAME -type f \( -name '*.so' -o -name '*.so.*' \) -exec strip --strip-unneeded {} + 2>/dev/null || true
+          make -C build install DESTDIR="$PWD/stage"
+          mkdir pkg && mv "stage/opt/$PLAIN" "pkg/$PLAIN"
+          cd "pkg/$PLAIN"
           # Kron4ek ships bin/wine as the 64-bit loader; new WoW64 already does that, just make sure it exists
-          [ -e /opt/$NAME/bin/wine ] || sudo ln -s wine64 /opt/$NAME/bin/wine
-          /opt/$NAME/bin/wine --version
-          cd /opt && sudo env XZ_OPT="-9 -T0" tar -Jcf "$GITHUB_WORKSPACE/$NAME.tar.xz" "$NAME"
-          cd "$GITHUB_WORKSPACE" && sha256sum "$NAME.tar.xz" | tee "$NAME.tar.xz.sha256"
+          [ -e bin/wine ] || ln -s wine64 bin/wine
+          find . -type f \( -name '*.so' -o -name '*.so.*' \) -exec strip --strip-unneeded {} + 2>/dev/null || true
+          # Not needed to RUN Wine: headers, man pages, import libs and the winegcc/widl toolchain
+          rm -rf include share/man
+          find lib -name '*.a' -delete
+          rm -f bin/{winegcc,wineg++,winecpp,winemaker,widl,wrc,wmc,winebuild,function_grep.pl}
+          ./bin/wine --version
+          du -sh .
+
+      - name: Fetch DXVK + vkd3d-proton (prebuilt upstream releases)
+        if: ${{ inputs.dxvk_version != 'none' || inputs.vkd3d_proton_version != 'none' }}
+        run: |
+          mkdir -p dl && cd dl
+          if [ "$DXVK_VERSION" != none ]; then
+            wget -q "https://github.com/doitsujin/dxvk/releases/download/v$DXVK_VERSION/dxvk-$DXVK_VERSION.tar.gz"
+            tar -xf "dxvk-$DXVK_VERSION.tar.gz"                       # -> dxvk-X/{x64,x32}
+            wget -q -O DXVK-LICENSE "https://raw.githubusercontent.com/doitsujin/dxvk/v$DXVK_VERSION/LICENSE"
+          fi
+          if [ "$VKD3D_VERSION" != none ]; then
+            wget -q "https://github.com/HansKristian-Work/vkd3d-proton/releases/download/v$VKD3D_VERSION/vkd3d-proton-$VKD3D_VERSION.tar.zst"
+            tar --zstd -xf "vkd3d-proton-$VKD3D_VERSION.tar.zst"      # -> vkd3d-proton-X/{x64,x86}
+            wget -q -O VKD3D-LICENSE "https://raw.githubusercontent.com/HansKristian-Work/vkd3d-proton/v$VKD3D_VERSION/LICENSE"
+          fi
+          ls -R . | head -40
+
+      - name: Assemble Steam/umu tool
+        run: |
+          cp -a "pkg/$PLAIN" "pkg/$TOOL"
+          cd "pkg/$TOOL"
+          tool_id="wine-$WINE_VERSION-patched${REVISION:+-$REVISION}"
+
+          # launcher: Steam calls run.sh (toolmanifest); umu-launcher looks for an executable named `proton`
+          install -m755 "$GITHUB_WORKSPACE/packaging/run.sh" run.sh
+          install -m755 "$GITHUB_WORKSPACE/packaging/run.sh" proton
+
+          # native manifest = no require_tool_appid, so Steam runs it on the host, not inside the Linux Runtime container
+          cat > toolmanifest.vdf <<VDF
+          "manifest"
+          {
+            "version" "2"
+            "commandline" "/run.sh %verb%"
+            "use_sessions" "1"
+            "compatmanager_layer_name" "proton"
+          }
+          VDF
+          sed -i 's/^          //' toolmanifest.vdf
+
+          cat > compatibilitytool.vdf <<VDF
+          "compatibilitytools"
+          {
+            "compat_tools"
+            {
+              "$tool_id"
+              {
+                "install_path" "."
+                "display_name" "Wine $WINE_VERSION (patched)${REVISION:+ $REVISION}"
+                "from_oslist"  "windows"
+                "to_oslist"    "linux"
+              }
+            }
+          }
+          VDF
+          sed -i 's/^          //' compatibilitytool.vdf
+
+          echo "$(date +%s) $tool_id" > version      # same format as upstream Proton: <unix time> <name>
+
+          mkdir -p share/licenses
+          d="$GITHUB_WORKSPACE/dl"
+          if [ "$DXVK_VERSION" != none ]; then
+            mkdir -p lib/wine/dxvk/x86_64-windows lib/wine/dxvk/i386-windows share/licenses/dxvk
+            cp "$d/dxvk-$DXVK_VERSION"/x64/*.dll lib/wine/dxvk/x86_64-windows/
+            cp "$d/dxvk-$DXVK_VERSION"/x32/*.dll lib/wine/dxvk/i386-windows/
+            cp "$d/DXVK-LICENSE" share/licenses/dxvk/LICENSE
+          fi
+          if [ "$VKD3D_VERSION" != none ]; then
+            mkdir -p lib/wine/vkd3d-proton/x86_64-windows lib/wine/vkd3d-proton/i386-windows share/licenses/vkd3d-proton
+            cp "$d/vkd3d-proton-$VKD3D_VERSION"/x64/*.dll lib/wine/vkd3d-proton/x86_64-windows/
+            cp "$d/vkd3d-proton-$VKD3D_VERSION"/x86/*.dll lib/wine/vkd3d-proton/i386-windows/
+            cp "$d/VKD3D-LICENSE" share/licenses/vkd3d-proton/LICENSE
+          fi
+          {
+            echo "Bundled third-party binaries (unmodified upstream releases):"
+            [ "$DXVK_VERSION" != none ]  && echo "- DXVK $DXVK_VERSION (zlib license) - source: https://github.com/doitsujin/dxvk/tree/v$DXVK_VERSION"
+            [ "$VKD3D_VERSION" != none ] && echo "- vkd3d-proton $VKD3D_VERSION (LGPL-2.1) - source: https://github.com/HansKristian-Work/vkd3d-proton/tree/v$VKD3D_VERSION"
+            echo "Not bundled (Microsoft, not redistributable): d3dcompiler_*, gdiplus, corefonts, msxml - Wine's own builtins apply."
+          } > share/licenses/BUNDLED.txt
+          cat toolmanifest.vdf compatibilitytool.vdf version share/licenses/BUNDLED.txt
+
+      - name: Smoke test the Steam/umu tool (headless)
+        if: ${{ inputs.smoke_test }}
+        run: |
+          t="$PWD/pkg/$TOOL"
+          export STEAM_COMPAT_DATA_PATH="$RUNNER_TEMP/compat" DISPLAY= WAYLAND_DISPLAY=
+          out="$(timeout 300 "$t/run.sh" waitforexitandrun cmd /c echo smoke-ok | tr -d '\r')"
+          echo "$out"; grep -qx smoke-ok <<<"$out"
+          if [ "$DXVK_VERSION" != none ]; then
+            cmp "$t/lib/wine/dxvk/x86_64-windows/d3d11.dll" "$STEAM_COMPAT_DATA_PATH/pfx/drive_c/windows/system32/d3d11.dll"
+            cmp "$t/lib/wine/dxvk/i386-windows/d3d11.dll"   "$STEAM_COMPAT_DATA_PATH/pfx/drive_c/windows/syswow64/d3d11.dll"
+          fi
+          [ "$VKD3D_VERSION" = none ] || cmp "$t/lib/wine/vkd3d-proton/x86_64-windows/d3d12.dll" "$STEAM_COMPAT_DATA_PATH/pfx/drive_c/windows/system32/d3d12.dll"
+          # path verbs: linux->windows must give a drive path, windows->linux must give back /tmp
+          win="$("$t/run.sh" getcompatpath /tmp | tr -d '\r')"; echo "getcompatpath: $win"; [[ "$win" == [A-Za-z]:* ]]
+          nat="$("$t/run.sh" getnativepath "$win" | tr -d '\r')"; echo "getnativepath: $nat"; [ "$nat" = /tmp ]
+          "$t/proton" runinprefix cmd /c echo proton-alias-ok | tr -d '\r' | grep -qx proton-alias-ok
+
+      - name: Package
+        run: |
+          export XZ_OPT="-9 -T0"
+          for n in "$PLAIN" "$TOOL"; do
+            tar --owner=0 --group=0 -C pkg -Jcf "$n.tar.xz" "$n"
+            sha256sum "$n.tar.xz" | tee "$n.tar.xz.sha256"
+          done
+          ls -lh *.tar.xz
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.NAME }}
+          name: ${{ env.PLAIN }}
           path: |
-            ${{ env.NAME }}.tar.xz
-            ${{ env.NAME }}.tar.xz.sha256
+            ${{ env.PLAIN }}.tar.xz*
+            ${{ env.TOOL }}.tar.xz*
 
       - name: Publish release
         if: ${{ inputs.publish }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="wine-$WINE_VERSION${{ inputs.revision != '' && format('-{0}', inputs.revision) || '' }}"
+          tag="wine-$WINE_VERSION${REVISION:+-$REVISION}"
           {
-            echo "Vanilla Wine $WINE_VERSION, new WoW64 (32-bit apps run without 32-bit libs), x86_64 host."
-            echo; echo "Patches applied (in order):"; cat applied.txt
+            echo "Vanilla Wine $WINE_VERSION, new WoW64 (32-bit apps need no 32-bit libs), x86_64 host."
+            echo
+            echo "**Files**"
+            echo "- \`$PLAIN.tar.xz\` - plain Wine. Use as a custom Wine runner in Lutris / Bottles / Heroic."
+            echo "- \`$TOOL.tar.xz\` - Steam / umu tool. Extract into \`~/.steam/root/compatibilitytools.d/\` (Steam Deck: \`~/.local/share/Steam/compatibilitytools.d/\`), restart Steam, then pick it under Properties > Compatibility. umu: \`PROTONPATH=/path/to/$TOOL umu-run app.exe\` (experimental)."
+            echo
+            echo "**Bundled in the Steam/umu tool:** DXVK ${DXVK_VERSION}, vkd3d-proton ${VKD3D_VERSION} (copied into each prefix on launch; \`PROTON_USE_WINED3D=1\` disables them)."
+            echo
+            echo "**Patches applied (in order):**"
+            cat applied.txt
           } > notes.md
+          files=("$PLAIN.tar.xz" "$PLAIN.tar.xz.sha256" "$TOOL.tar.xz" "$TOOL.tar.xz.sha256")
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "$NAME.tar.xz" "$NAME.tar.xz.sha256" --clobber
+            gh release upload "$tag" "${files[@]}" --clobber
             gh release edit "$tag" --notes-file notes.md
           else
-            gh release create "$tag" "$NAME.tar.xz" "$NAME.tar.xz.sha256" \
-              --title "Wine $WINE_VERSION (patched, WoW64)" --notes-file notes.md
+            gh release create "$tag" "${files[@]}" \
+              --title "Wine $WINE_VERSION (patched, WoW64)${REVISION:+ $REVISION}" --notes-file notes.md
           fi
